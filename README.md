@@ -16,7 +16,7 @@ Task management extension for [QuickSheet](https://github.com/cemheren/QuickShee
 In any QuickSheet cell:
 
 ```
-ext: github:cemheren/quicksheet-todo
+ext: github:Deskworks/quicksheet-todo
 ```
 
 ## Usage
