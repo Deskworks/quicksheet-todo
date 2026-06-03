@@ -111,10 +111,22 @@ class Program
             rest = parts.Length > 1 ? parts[1] : "";
         }
 
+        // Shortcut: bare number toggles task done/undone (e.g., "todo: 3")
+        if (int.TryParse(command, out int toggleId) && string.IsNullOrWhiteSpace(rest))
+        {
+            var task = Tasks.FirstOrDefault(t => t.Id == toggleId);
+            if (task != null)
+            {
+                ToggleTask(id, command, !task.Done, gridCols);
+                return;
+            }
+        }
+
         switch (command)
         {
             case "list":
             case "ls":
+            case "":
                 ShowList(id, gridRows, gridCols);
                 break;
             case "add":
@@ -143,7 +155,7 @@ class Program
                 ShowStats(id, gridCols);
                 break;
             default:
-                // Treat unknown command as "add <entire text>"
+                // Treat unknown command as "add <entire text>" (e.g., "todo: Buy milk")
                 AddTask(id, $"{command} {rest}".Trim(), gridCols);
                 break;
         }

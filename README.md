@@ -21,16 +21,25 @@ ext: github:Deskworks/quicksheet-todo
 
 ## Usage
 
+**Quick shortcuts** — minimal typing for common actions:
+
+| Cell content | What it does |
+|---|---|
+| `todo:` | Show all tasks (same as `todo: list`) |
+| `todo: Buy groceries` | Add a task — no `add` keyword needed |
+| `todo: 3` | Toggle task #3 done/undone |
+| `todo: rm 3` | Delete task #3 |
+
+**Full commands** for when you need more control:
+
 | Cell content | What it does |
 |---|---|
 | `todo: list` | Show all tasks sorted by priority/status |
-| `todo: add Buy groceries` | Add a task (normal priority) |
 | `todo: add !high Fix login bug` | Add with high priority |
 | `todo: add @2026-05-20 Ship v1.0` | Add with due date |
 | `todo: add !critical @2026-05-15 Deploy` | Priority + due date |
 | `todo: done 3` | Mark task #3 complete |
 | `todo: undo 3` | Reopen task #3 |
-| `todo: rm 3` | Delete task #3 |
 | `todo: clear done` | Remove all completed tasks |
 | `todo: stats` | Show summary with progress bar |
 
