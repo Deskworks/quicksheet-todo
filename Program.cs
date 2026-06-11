@@ -5,12 +5,16 @@ using System.Text.Json.Serialization;
 /// QuickSheet Todo Extension — task management in your spreadsheet cells.
 /// Prefix: "todo"
 /// 
-/// Usage:
+/// Quick usage (minimal typing):
+///   todo:                               — show all tasks
+///   todo: Buy groceries                 — add task (just type it!)
+///   todo: 3                             — toggle task #3 done/undone
+///   todo: -3                            — remove task #3
+/// 
+/// Full commands:
 ///   todo: list                          — show all tasks
-///   todo: add Buy groceries             — add task (default priority: normal)
 ///   todo: add !high Fix login bug       — add with priority (!low, !normal, !high, !critical)
 ///   todo: add @2026-05-20 Ship v1.0     — add with due date
-///   todo: add !high @2026-05-20 Deploy  — both priority and due date
 ///   todo: done 3                        — mark task #3 complete
 ///   todo: undo 3                        — mark task #3 incomplete
 ///   todo: rm 3                          — remove task #3
@@ -109,6 +113,23 @@ class Program
             var parts = rest.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
             command = parts.Length > 0 ? parts[0].ToLowerInvariant() : "list";
             rest = parts.Length > 1 ? parts[1] : "";
+        }
+
+        // Shorthand: bare number toggles done/undone, -N removes task N
+        if (command.Length > 0 && command[0] == '-' && int.TryParse(command[1..], out _))
+        {
+            RemoveTask(id, command[1..], gridCols);
+            return;
+        }
+        if (int.TryParse(command, out int toggleId))
+        {
+            var task = Tasks.FirstOrDefault(t => t.Id == toggleId);
+            if (task != null)
+            {
+                ToggleTask(id, command, !task.Done, gridCols);
+                return;
+            }
+            // Not a known task ID — fall through to add as text
         }
 
         switch (command)
