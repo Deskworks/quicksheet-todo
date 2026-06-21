@@ -11,9 +11,12 @@ using System.Text.Json.Serialization;
 ///   todo: add !high Fix login bug       — add with priority (!low, !normal, !high, !critical)
 ///   todo: add @2026-05-20 Ship v1.0     — add with due date
 ///   todo: add !high @2026-05-20 Deploy  — both priority and due date
+///   todo: add Milk; Eggs; !high Pay rent — add several tasks at once (';' separated)
 ///   todo: done 3                        — mark task #3 complete
-///   todo: undo 3                        — mark task #3 incomplete
-///   todo: rm 3                          — remove task #3
+///   todo: done login                    — complete by title match (no ID lookup)
+///   todo: done                          — complete the top-priority pending task
+///   todo: undo 3 / undo                 — reopen task #3 (or the last completed one)
+///   todo: rm 3 / rm login               — remove by # or title match
 ///   todo: clear done                    — remove all completed tasks
 ///   todo: stats                         — summary stats
 /// 
@@ -157,11 +160,58 @@ class Program
             return;
         }
 
+        // Multi-add: split on ';' so several tasks land from a single cell edit.
+        var segments = text.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Length > 1)
+        {
+            var added = new List<TodoItem>();
+            foreach (var seg in segments)
+            {
+                var t = ParseAndCreate(seg);
+                if (t != null) added.Add(t);
+            }
+            if (added.Count == 0)
+            {
+                SendCells(id, new[] { Cell(0, 0, "❌ No valid tasks to add") });
+                return;
+            }
+            SaveTasks();
+            var multiCells = new List<object> { Cell(0, 0, $"✅ Added {added.Count} tasks") };
+            for (int i = 0; i < added.Count; i++)
+                multiCells.Add(Cell(i + 1, 0, $"#{added[i].Id} {added[i].Title}"));
+            multiCells.Add(Cell(added.Count + 1, 0, $"{Tasks.Count(t => !t.Done)} pending · {Tasks.Count(t => t.Done)} done"));
+            SendCells(id, multiCells.ToArray());
+            return;
+        }
+
+        var task = ParseAndCreate(text);
+        if (task == null)
+        {
+            SendCells(id, new[] { Cell(0, 0, "❌ Task title cannot be empty") });
+            return;
+        }
+        SaveTasks();
+
+        var cells = new List<object>
+        {
+            Cell(0, 0, $"✅ Added #{task.Id}"),
+            Cell(0, 1, task.Title),
+        };
+        if (gridCols >= 3) cells.Add(Cell(0, 2, PriorityLabel(task.Priority)));
+        if (gridCols >= 4 && task.DueDate.HasValue) cells.Add(Cell(0, 3, $"📅 {task.DueDate:yyyy-MM-dd}"));
+        cells.Add(Cell(1, 0, $"{Tasks.Count(t => !t.Done)} pending · {Tasks.Count(t => t.Done)} done"));
+
+        SendCells(id, cells.ToArray());
+    }
+
+    // Parses one task description (priority flags + @date) and appends it to Tasks.
+    // Returns the created item, or null when the title is empty. Does not save.
+    static TodoItem? ParseAndCreate(string text)
+    {
         var priority = Priority.Normal;
         DateOnly? dueDate = null;
         var words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
 
-        // Parse priority flags
         for (int i = words.Count - 1; i >= 0; i--)
         {
             var w = words[i].ToLowerInvariant();
@@ -171,7 +221,6 @@ class Program
             else if (w is "!critical" or "!crit" or "!urgent") { priority = Priority.Critical; words.RemoveAt(i); }
         }
 
-        // Parse @date
         for (int i = words.Count - 1; i >= 0; i--)
         {
             if (words[i].StartsWith('@') && DateOnly.TryParse(words[i][1..], out var d))
@@ -182,11 +231,7 @@ class Program
         }
 
         string title = string.Join(' ', words).Trim();
-        if (string.IsNullOrWhiteSpace(title))
-        {
-            SendCells(id, new[] { Cell(0, 0, "❌ Task title cannot be empty") });
-            return;
-        }
+        if (string.IsNullOrWhiteSpace(title)) return null;
 
         var task = new TodoItem
         {
@@ -198,18 +243,7 @@ class Program
             CreatedAt = DateTime.Now
         };
         Tasks.Add(task);
-        SaveTasks();
-
-        var cells = new List<object>
-        {
-            Cell(0, 0, $"✅ Added #{task.Id}"),
-            Cell(0, 1, task.Title),
-        };
-        if (gridCols >= 3) cells.Add(Cell(0, 2, PriorityLabel(task.Priority)));
-        if (gridCols >= 4 && dueDate.HasValue) cells.Add(Cell(0, 3, $"📅 {dueDate:yyyy-MM-dd}"));
-        cells.Add(Cell(1, 0, $"{Tasks.Count(t => !t.Done)} pending · {Tasks.Count(t => t.Done)} done"));
-
-        SendCells(id, cells.ToArray());
+        return task;
     }
 
     static void ShowList(string id, int gridRows, int gridCols)
@@ -272,17 +306,32 @@ class Program
 
     static void ToggleTask(string id, string rest, bool done, int gridCols)
     {
-        if (!int.TryParse(rest.Trim(), out int taskId))
-        {
-            SendCells(id, new[] { Cell(0, 0, $"❌ Usage: todo: {(done ? "done" : "undo")} <task #>") });
-            return;
-        }
+        rest = rest.Trim();
 
-        var task = Tasks.FirstOrDefault(t => t.Id == taskId);
-        if (task == null)
+        TodoItem? task;
+        if (rest.Length == 0)
         {
-            SendCells(id, new[] { Cell(0, 0, $"❌ Task #{taskId} not found") });
-            return;
+            // No reference: act on the obvious task — top-priority pending for `done`,
+            // most recently completed for `undo`. One cell edit, no ID lookup.
+            task = done
+                ? Tasks.Where(t => !t.Done)
+                    .OrderByDescending(t => t.Priority)
+                    .ThenBy(t => t.DueDate ?? DateOnly.MaxValue)
+                    .ThenBy(t => t.Id).FirstOrDefault()
+                : Tasks.Where(t => t.Done).OrderByDescending(t => t.Id).FirstOrDefault();
+
+            if (task == null)
+            {
+                SendCells(id, new[] { Cell(0, 0, done ? "✨ No pending tasks" : "ℹ️ No completed tasks to reopen") });
+                return;
+            }
+        }
+        else
+        {
+            var match = ResolveTask(id, rest, done ? t => !t.Done : t => t.Done,
+                done ? "pending" : "completed");
+            if (match == null) return; // ResolveTask already reported the problem
+            task = match;
         }
 
         task.Done = done;
@@ -298,25 +347,58 @@ class Program
         });
     }
 
+    // Resolves a task reference that is either a numeric ID or a title substring
+    // (case-insensitive). On ambiguity or no match it writes an explanatory cell
+    // and returns null. `filter`/`label` scope the candidate set (e.g. only pending).
+    static TodoItem? ResolveTask(string id, string rest, Func<TodoItem, bool> filter, string label)
+    {
+        if (int.TryParse(rest, out int taskId))
+        {
+            var byId = Tasks.FirstOrDefault(t => t.Id == taskId);
+            if (byId == null)
+                SendCells(id, new[] { Cell(0, 0, $"❌ Task #{taskId} not found") });
+            return byId;
+        }
+
+        var matches = Tasks.Where(filter)
+            .Where(t => t.Title.Contains(rest, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (matches.Count == 1) return matches[0];
+
+        if (matches.Count == 0)
+        {
+            SendCells(id, new[] { Cell(0, 0, $"❌ No {label} task matching \"{rest}\"") });
+            return null;
+        }
+
+        var cells = new List<object> { Cell(0, 0, $"❓ {matches.Count} {label} tasks match \"{rest}\" — use the #:") };
+        for (int i = 0; i < matches.Count; i++)
+            cells.Add(Cell(i + 1, 0, $"#{matches[i].Id} {matches[i].Title}"));
+        SendCells(id, cells.ToArray());
+        return null;
+    }
+
     static void RemoveTask(string id, string rest, int gridCols)
     {
-        if (!int.TryParse(rest.Trim(), out int taskId))
+        rest = rest.Trim();
+        if (rest.Length == 0)
         {
-            SendCells(id, new[] { Cell(0, 0, "❌ Usage: todo: rm <task #>") });
+            SendCells(id, new[] { Cell(0, 0, "❌ Usage: todo: rm <task # or title>") });
             return;
         }
 
-        int removed = Tasks.RemoveAll(t => t.Id == taskId);
+        var task = ResolveTask(id, rest, _ => true, "");
+        if (task == null) return; // ResolveTask reported not-found / ambiguity
+
+        Tasks.Remove(task);
         SaveTasks();
 
-        if (removed == 0)
-            SendCells(id, new[] { Cell(0, 0, $"❌ Task #{taskId} not found") });
-        else
-            SendCells(id, new[]
-            {
-                Cell(0, 0, $"🗑️ Removed #{taskId}"),
-                Cell(1, 0, $"{Tasks.Count} task(s) remaining")
-            });
+        SendCells(id, new[]
+        {
+            Cell(0, 0, $"🗑️ Removed #{task.Id} {task.Title}"),
+            Cell(1, 0, $"{Tasks.Count} task(s) remaining")
+        });
     }
 
     static void ClearDone(string id, string rest, int gridCols)
